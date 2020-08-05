@@ -5910,6 +5910,21 @@ static void tcp_try_undo_spurious_syn(struct sock *sk)
 	    syn_stamp == tp->rx_opt.rcv_tsecr)
 		tp->undo_marker = 0;
 }
+void initialise_perc_options(struct perc_options_received* opts){
+	int i = 0;
+
+	opts->ack = 1;
+	opts->fin = 0;
+	for(i = 0; i < 4; i++){
+		opts->phr[i].bottleRate = 1024;
+		opts->phr[i].allocRate = 0;
+		opts->phr[i].bottleState = 0;
+		opts->phr[i].ignoreBit = 0;
+		opts->phr[i].bos = 0;
+	}
+}
+
+
 
 static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 					 const struct tcphdr *th)
@@ -6056,6 +6071,9 @@ discard:
 			return 0;
 		} else {
 			tcp_send_ack(sk);
+			initialise_perc_options(&tp->rx_opt.perc_opts);
+			tcp_send_perc_cp(sk);
+			//tcp_send_ack(sk);
 		}
 		return -1;
 	}

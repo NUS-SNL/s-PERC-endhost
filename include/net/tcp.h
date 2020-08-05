@@ -610,6 +610,9 @@ bool tcp_schedule_loss_probe(struct sock *sk, bool advancing_rto);
 void tcp_skb_collapse_tstamp(struct sk_buff *skb,
 			     const struct sk_buff *next_skb);
 
+void __tcp_send_perc_cp(struct sock *sk, u32 rcv_nxt);
+void tcp_send_perc_cp(struct sock *sk);
+
 /* tcp_input.c */
 void tcp_rearm_rto(struct sock *sk);
 void tcp_synack_rtt_meas(struct sock *sk, struct request_sock *req);

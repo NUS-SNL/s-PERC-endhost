@@ -437,14 +437,14 @@ struct perc_perhop_out{
 	u32 bottleRate;
 	u32 allocRate;
 	u8 bottleState : 1,
-	   ignoreBite : 1,
+	   ignoreBit: 1,
 	   bos : 1;
 };
 
-struct perc_out_options{
+struct perc_out_options{	
+	struct perc_perhop_out pho[4];
 	u8 ack : 1,
 	   fin : 1;
-	struct perc_perhop_out pho[4];
 };
 
 struct tcp_out_options {
@@ -457,7 +457,6 @@ struct tcp_out_options {
 	__u32 tsval, tsecr;	/* need to include OPTION_TS */
 	struct tcp_fastopen_cookie *fastopen_cookie;	/* Fast open cookie */
 	struct mptcp_out_options mptcp;
-	struct perc_out_options perc_opts_out;
 };
 
 static void mptcp_options_write(__be32 *ptr, struct tcp_out_options *opts)
@@ -3807,6 +3806,251 @@ EXPORT_SYMBOL_GPL(__tcp_send_ack);
 void tcp_send_ack(struct sock *sk)
 {
 	__tcp_send_ack(sk, tcp_sk(sk)->rcv_nxt);
+}
+
+
+/* PERC CONTROL PACKET SENDING PROCEDURES */
+
+static unsigned int tcp_perc_options(struct sock *sk, struct sk_buff *skb,
+					struct perc_out_options *opts)
+{	int i = 0;
+	struct tcp_sock *tp = tcp_sk(sk);
+	unsigned int size = 0;
+	struct perc_options_received rcv = tp->rx_opt.perc_opts;
+	for(i = 0; i < 4; i++){
+		opts->pho[i].bottleRate = rcv.phr[i].bottleRate;
+		opts->pho[i].allocRate = rcv.phr[i].allocRate;
+		opts->pho[i].bottleState = rcv.phr[i].bottleState;
+		opts->pho[i].ignoreBit = rcv.phr[i].ignoreBit;
+		opts->pho[i].bos = rcv.phr[i].bos;
+	}
+	if(rcv.ack == 1)
+		opts->ack = 0;
+	else
+		opts->ack = 1;
+
+	opts->fin = rcv.fin;
+	size += TCPOLEN_PERC;
+
+	return size;
+}
+
+static void tcp_perc_options_write(__be32 *ptr, struct tcp_sock *tp,
+			      struct perc_out_options *opts)
+{	int i = 0;
+	char *c;
+	u8 hop_cnt = 1;
+	*ptr++ = htonl((TCPOPT_PERC << 24) | (TCPOLEN_PERC << 16) | 
+				(hop_cnt << 8) | (opts->ack << 1) | (opts->fin)); 		//First 4 bytes written
+	for(i = 0; i < 4; i++){
+		*ptr++ = htonl(opts->pho[i].bottleRate);
+		*ptr++ = htonl(opts->pho[i].allocRate);
+		c = (char *)ptr;
+		*c++ = ((opts->pho[i].bottleRate << 7) | (opts->pho[i].ignoreBit << 6) | (opts->pho[i].bos << 5));
+		ptr = (__be32*) c;
+	}
+}
+
+
+
+static int __tcp_transmit_skb_perc(struct sock *sk, struct sk_buff *skb,
+			      int clone_it, gfp_t gfp_mask, u32 rcv_nxt)
+{
+	const struct inet_connection_sock *icsk = inet_csk(sk);
+	struct inet_sock *inet;
+	struct tcp_sock *tp;
+	struct tcp_skb_cb *tcb;
+	struct perc_out_options opts;
+	unsigned int tcp_options_size, tcp_header_size;
+	struct sk_buff *oskb = NULL;
+	//struct tcp_md5sig_key *md5;
+	struct tcphdr *th;
+	u64 prior_wstamp;
+	int err;
+
+	BUG_ON(!skb || !tcp_skb_pcount(skb));
+	tp = tcp_sk(sk);
+	prior_wstamp = tp->tcp_wstamp_ns;
+	tp->tcp_wstamp_ns = max(tp->tcp_wstamp_ns, tp->tcp_clock_cache);
+	skb->skb_mstamp_ns = tp->tcp_wstamp_ns;
+	if (clone_it) {
+		TCP_SKB_CB(skb)->tx.in_flight = TCP_SKB_CB(skb)->end_seq
+			- tp->snd_una;
+		oskb = skb;
+
+		tcp_skb_tsorted_save(oskb) {
+			if (unlikely(skb_cloned(oskb)))
+				skb = pskb_copy(oskb, gfp_mask);
+			else
+				skb = skb_clone(oskb, gfp_mask);
+		} tcp_skb_tsorted_restore(oskb);
+
+		if (unlikely(!skb))
+			return -ENOBUFS;
+		/* retransmit skbs might have a non zero value in skb->dev
+		 * because skb->dev is aliased with skb->rbnode.rb_left
+		 */
+		skb->dev = NULL;
+	}
+
+	inet = inet_sk(sk);
+	tcb = TCP_SKB_CB(skb);
+	memset(&opts, 0, sizeof(opts));
+
+	tcp_options_size = tcp_perc_options(sk, skb, &opts);
+		/* Force a PSH flag on all (GSO) packets to expedite GRO flush
+		 * at receiver : This slightly improve GRO performance.
+		 * Note that we do not force the PSH flag for non GSO packets,
+		 * because they might be sent under high congestion events,
+		 * and in this case it is better to delay the delivery of 1-MSS
+		 * packets and thus the corresponding ACK packet that would
+		 * release the following packet.
+		 */
+		if (tcp_skb_pcount(skb) > 1)
+			tcb->tcp_flags |= TCPHDR_PSH;
+	
+	tcp_header_size = tcp_options_size + sizeof(struct tcphdr);
+
+	/* if no packet is in qdisc/device queue, then allow XPS to select
+	 * another queue. We can be called from tcp_tsq_handler()
+	 * which holds one reference to sk.
+	 *
+	 * TODO: Ideally, in-flight pure ACK packets should not matter here.
+	 * One way to get this would be to set skb->truesize = 2 on them.
+	 */
+	skb->ooo_okay = sk_wmem_alloc_get(sk) < SKB_TRUESIZE(1);
+
+	/* If we had to use memory reserve to allocate this skb,
+	 * this might cause drops if packet is looped back :
+	 * Other socket might not have SOCK_MEMALLOC.
+	 * Packets not looped back do not care about pfmemalloc.
+	 */
+	skb->pfmemalloc = 0;
+
+	skb_push(skb, tcp_header_size);
+	skb_reset_transport_header(skb);
+
+	skb_orphan(skb);
+	skb->sk = sk;
+	skb->destructor = skb_is_tcp_pure_ack(skb) ? __sock_wfree : tcp_wfree;
+	skb_set_hash_from_sk(skb, sk);
+	refcount_add(skb->truesize, &sk->sk_wmem_alloc);
+
+	skb_set_dst_pending_confirm(skb, sk->sk_dst_pending_confirm);
+
+	/* Build TCP header and checksum it. */
+	th = (struct tcphdr *)skb->data;
+	th->source		= inet->inet_sport;
+	th->dest		= inet->inet_dport;
+	th->seq			= htonl(tcb->seq);
+	th->ack_seq		= htonl(rcv_nxt);
+	*(((__be16 *)th) + 6)	= htons(((tcp_header_size >> 2) << 12) |
+					tcb->tcp_flags);
+
+	th->check		= 0;
+	th->urg_ptr		= 0;
+
+	/* The urg_mode check is necessary during a below snd_una win probe */
+	if (unlikely(tcp_urg_mode(tp) && before(tcb->seq, tp->snd_up))) {
+		if (before(tp->snd_up, tcb->seq + 0x10000)) {
+			th->urg_ptr = htons(tp->snd_up - tcb->seq);
+			th->urg = 1;
+		} else if (after(tcb->seq + 0xFFFF, tp->snd_nxt)) {
+			th->urg_ptr = htons(0xFFFF);
+			th->urg = 1;
+		}
+	}
+
+	tcp_perc_options_write((__be32 *)(th + 1), tp, &opts);
+	skb_shinfo(skb)->gso_type = sk->sk_gso_type;
+	if (likely(!(tcb->tcp_flags & TCPHDR_SYN))) {
+		th->window      = htons(tcp_select_window(sk));
+		tcp_ecn_send(sk, skb, th, tcp_header_size);
+	} else {
+		/* RFC1323: The window in SYN & SYN/ACK segments
+		 * is never scaled.
+		 */
+		th->window	= htons(min(tp->rcv_wnd, 65535U));
+	}
+
+	icsk->icsk_af_ops->send_check(sk, skb);
+
+	if (likely(tcb->tcp_flags & TCPHDR_ACK))
+		tcp_event_ack_sent(sk, tcp_skb_pcount(skb), rcv_nxt);
+
+	if (skb->len != tcp_header_size) {
+		tcp_event_data_sent(tp, sk);
+		tp->data_segs_out += tcp_skb_pcount(skb);
+		tp->bytes_sent += skb->len - tcp_header_size;
+	}
+
+	if (after(tcb->end_seq, tp->snd_nxt) || tcb->seq == tcb->end_seq)
+		TCP_ADD_STATS(sock_net(sk), TCP_MIB_OUTSEGS,
+			      tcp_skb_pcount(skb));
+
+	tp->segs_out += tcp_skb_pcount(skb);
+	/* OK, its time to fill skb_shinfo(skb)->gso_{segs|size} */
+	skb_shinfo(skb)->gso_segs = tcp_skb_pcount(skb);
+	skb_shinfo(skb)->gso_size = tcp_skb_mss(skb);
+
+	/* Leave earliest departure time in skb->tstamp (skb->skb_mstamp_ns) */
+
+	/* Cleanup our debris for IP stacks */
+	memset(skb->cb, 0, max(sizeof(struct inet_skb_parm),
+			       sizeof(struct inet6_skb_parm)));
+
+	tcp_add_tx_delay(skb, tp);
+
+	err = icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
+
+	if (unlikely(err > 0)) {
+		tcp_enter_cwr(sk);
+		err = net_xmit_eval(err);
+	}
+	if (!err && oskb) {
+		tcp_update_skb_after_send(sk, oskb, prior_wstamp);
+		tcp_rate_skb_sent(sk, oskb);
+	}
+	return err;
+}
+
+void __tcp_send_perc_cp(struct sock *sk, u32 rcv_nxt){
+	struct sk_buff *buff;
+
+	/* If we have been reset, we may not send again. */
+	if (sk->sk_state == TCP_CLOSE)
+		return;
+
+	/* We are not putting this on the write queue, so
+	 * tcp_transmit_skb() will set the ownership to this
+	 * sock.
+	 */
+	buff = alloc_skb(MAX_TCP_HEADER,
+			 sk_gfp_mask(sk, GFP_ATOMIC | __GFP_NOWARN));
+	if (unlikely(!buff)) {
+		inet_csk_schedule_ack(sk);
+		inet_csk(sk)->icsk_ack.ato = TCP_ATO_MIN;
+		inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK,
+					  TCP_DELACK_MAX, TCP_RTO_MAX);
+		return;
+	}
+
+	/* Reserve space for headers and prepare control bits. */
+	skb_reserve(buff, MAX_TCP_HEADER);
+	tcp_init_nondata_skb(buff, tcp_acceptable_seq(sk), TCPHDR_ACK);
+
+	/* We do not want pure acks influencing TCP Small Queues or fq/pacing
+	 * too much.
+	 * SKB_TRUESIZE(max(1 .. 66, MAX_TCP_HEADER)) is unfortunately ~784
+	 */
+	//skb_set_tcp_pure_ack(buff);
+
+	/* Send it off, this clears delayed acks for us. */
+	__tcp_transmit_skb_perc(sk, buff, 0, (__force gfp_t)0, rcv_nxt);
+}
+
+void tcp_send_perc_cp(struct sock *sk){
+	__tcp_send_perc_cp(sk, tcp_sk(sk)->rcv_nxt);
 }
 
 /* This routine sends a packet with an out of date sequence

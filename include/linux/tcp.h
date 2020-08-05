@@ -82,14 +82,14 @@ struct perc_perhop_received{
 	u32 bottleRate;
 	u32 allocRate;
 	u8 bottleState : 1,
-	   ignoreBite : 1,
+	   ignoreBit : 1,
 	   bos : 1;
 };
 
 struct perc_options_received{
+	struct perc_perhop_received phr[4];
 	u8 ack : 1,
 	   fin : 1;
-	struct perc_perhop_received phr[4];
 };
 
 struct tcp_options_received {
