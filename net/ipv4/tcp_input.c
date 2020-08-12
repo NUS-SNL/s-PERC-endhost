@@ -3966,6 +3966,38 @@ static bool tcp_parse_aligned_timestamp(struct tcp_sock *tp, const struct tcphdr
 	return false;
 }
 
+static bool tcp_parse_aligned_perc(struct tcp_sock *tp, const struct tcphdr *th){
+	const unsigned char *ptr;
+	int i = 0;
+	u8 ack = (1 << 1), fin = (1 << 0), bottleState = (1 << 7), ignoreBit = (1 << 6), bos = (1 << 5);
+	int opcode, opsize;
+	ptr = (const unsigned char*) (th + 1);
+	opcode = *ptr++;
+	if(opcode == TCPOPT_PERC){		
+		opsize = *ptr++;
+		if(opsize == TCPOLEN_PERC_ALIGNED){
+			ptr++;		//ignoring hop_cnt
+			tp->rx_opt.perc_opts.ack = (*ptr) & ack;
+			tp->rx_opt.perc_opts.fin = (*ptr) & fin;
+			ptr++;
+			for(i = 0; i < 4; i++){
+				const __be32 *beptr = (const __be32*)ptr;
+				tp->rx_opt.perc_opts.phr[i].bottleRate = ntohl(*beptr);
+				beptr++;
+				tp->rx_opt.perc_opts.phr[i].allocRate = ntohl(*beptr);
+				beptr++;
+				ptr = (char *)beptr;
+				tp->rx_opt.perc_opts.phr[i].bottleState = (*ptr) & bottleState;
+				tp->rx_opt.perc_opts.phr[i].ignoreBit = (*ptr) & ignoreBit;
+				tp->rx_opt.perc_opts.phr[i].bos = (*ptr) & bos;
+				ptr++;
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
 /* Fast parse options. This hopes to only see timestamps.
  * If it is wrong it falls back on tcp_parse_options().
  */
@@ -5613,6 +5645,13 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	 *	extra cost of the net_bh soft interrupt processing...
 	 *	We do checksum and copy also but from device to kernel.
 	 */
+
+	if(tp->tcp_header_len == sizeof(struct tcphdr) + TCPOLEN_PERC_ALIGNED){
+		if(tcp_parse_aligned_perc(tp,th)){
+			tcp_send_perc_cp(sk);
+			return;
+		}
+	}
 
 	tp->rx_opt.saw_tstamp = 0;
 

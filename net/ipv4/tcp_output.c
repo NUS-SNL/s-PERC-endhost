@@ -3846,7 +3846,7 @@ static void tcp_perc_options_write(__be32 *ptr, struct tcp_sock *tp,
 		*ptr++ = htonl(opts->pho[i].bottleRate);
 		*ptr++ = htonl(opts->pho[i].allocRate);
 		c = (char *)ptr;
-		*c++ = ((opts->pho[i].bottleRate << 7) | (opts->pho[i].ignoreBit << 6) | (opts->pho[i].bos << 5));
+		*c++ = ((opts->pho[i].bottleState << 7) | (opts->pho[i].ignoreBit << 6) | (opts->pho[i].bos << 5));
 		ptr = (__be32*) c;
 	}
 }
