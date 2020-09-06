@@ -3976,9 +3976,15 @@ static bool tcp_parse_aligned_perc(struct tcp_sock *tp, const struct tcphdr *th)
 	if(opcode == TCPOPT_PERC){		
 		opsize = *ptr++;
 		if(opsize == TCPOLEN_PERC_ALIGNED){
-			ptr++;		//ignoring hop_cnt
-			tp->rx_opt.perc_opts.ack = (*ptr) & ack;
-			tp->rx_opt.perc_opts.fin = (*ptr) & fin;
+			ptr++;				//ignoring hop_cnt
+			if((*ptr) & ack)
+				tp->rx_opt.perc_opts.ack = 1;
+			else
+				tp->rx_opt.perc_opts.ack = 0;
+			if((*ptr) & fin)
+				tp->rx_opt.perc_opts.fin = 1;
+			else
+				tp->rx_opt.perc_opts.fin = 0;
 			ptr++;
 			for(i = 0; i < 4; i++){
 				const __be32 *beptr = (const __be32*)ptr;
@@ -3987,9 +3993,18 @@ static bool tcp_parse_aligned_perc(struct tcp_sock *tp, const struct tcphdr *th)
 				tp->rx_opt.perc_opts.phr[i].allocRate = ntohl(*beptr);
 				beptr++;
 				ptr = (char *)beptr;
-				tp->rx_opt.perc_opts.phr[i].bottleState = (*ptr) & bottleState;
-				tp->rx_opt.perc_opts.phr[i].ignoreBit = (*ptr) & ignoreBit;
-				tp->rx_opt.perc_opts.phr[i].bos = (*ptr) & bos;
+				if((*ptr) & bottleState)
+					tp->rx_opt.perc_opts.phr[i].bottleState = 1;
+				else
+					tp->rx_opt.perc_opts.phr[i].bottleState = 0;
+				if((*ptr) & ignoreBit)
+					tp->rx_opt.perc_opts.phr[i].ignoreBit = 1;
+				else
+					tp->rx_opt.perc_opts.phr[i].ignoreBit = 0;
+				if((*ptr) & bos)
+					tp->rx_opt.perc_opts.phr[i].bos = 1;
+				else
+					tp->rx_opt.perc_opts.phr[i].bos = 0;
 				ptr++;
 			}
 			return true;
@@ -5645,10 +5660,12 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	 *	extra cost of the net_bh soft interrupt processing...
 	 *	We do checksum and copy also but from device to kernel.
 	 */
-
-	if(tp->tcp_header_len == sizeof(struct tcphdr) + TCPOLEN_PERC_ALIGNED){
+	//printk("PERC: %x %lx %x", tp->tcp_header_len, sizeof(struct tcphdr), TCPOLEN_PERC_ALIGNED);
+	if(th->doff * 4 == sizeof(struct tcphdr) + TCPOLEN_PERC_ALIGNED){
 		if(tcp_parse_aligned_perc(tp,th)){
+			//printk("PERC:Test");
 			tcp_send_perc_cp(sk);
+			__kfree_skb(skb);
 			return;
 		}
 	}
@@ -5951,15 +5968,17 @@ static void tcp_try_undo_spurious_syn(struct sock *sk)
 }
 void initialise_perc_options(struct perc_options_received* opts){
 	int i = 0;
-
 	opts->ack = 1;
 	opts->fin = 0;
 	for(i = 0; i < 4; i++){
-		opts->phr[i].bottleRate = 1024;
+		opts->phr[i].bottleRate = 0xFFFFFFFF;
 		opts->phr[i].allocRate = 0;
-		opts->phr[i].bottleState = 0;
-		opts->phr[i].ignoreBit = 0;
-		opts->phr[i].bos = 0;
+		opts->phr[i].bottleState = 1;
+		opts->phr[i].ignoreBit = 1;
+		if(i == 3)
+			opts->phr[i].bos = 1;
+		else
+			opts->phr[i].bos = 0;
 	}
 }
 
