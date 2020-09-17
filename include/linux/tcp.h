@@ -362,6 +362,7 @@ struct tcp_sock {
 	unsigned int		keepalive_intvl;  /* time interval between keep alive probes */
 
 	int			linger2;
+	u8 perc : 1;
 
 
 /* Sock_ops bpf program related variables */

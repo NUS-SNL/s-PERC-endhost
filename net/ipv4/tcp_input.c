@@ -5660,13 +5660,13 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	 *	extra cost of the net_bh soft interrupt processing...
 	 *	We do checksum and copy also but from device to kernel.
 	 */
-	//printk("PERC: %x %lx %x", tp->tcp_header_len, sizeof(struct tcphdr), TCPOLEN_PERC_ALIGNED);
-	if(th->doff * 4 == sizeof(struct tcphdr) + TCPOLEN_PERC_ALIGNED){
-		if(tcp_parse_aligned_perc(tp,th)){
-			//printk("PERC:Test");
-			tcp_send_perc_cp(sk);
-			__kfree_skb(skb);
-			return;
+	if(tp->perc){
+		if(th->doff * 4 == sizeof(struct tcphdr) + TCPOLEN_PERC_ALIGNED){
+			if(tcp_parse_aligned_perc(tp,th)){
+				tcp_send_perc_cp(sk);
+				__kfree_skb(skb);
+				return;
+			}
 		}
 	}
 
@@ -6129,9 +6129,10 @@ discard:
 			return 0;
 		} else {
 			tcp_send_ack(sk);
-			initialise_perc_options(&tp->rx_opt.perc_opts);
-			tcp_send_perc_cp(sk);
-			//tcp_send_ack(sk);
+			if(tp->perc){										//Send the first control packet IF perc is enabled
+				initialise_perc_options(&tp->rx_opt.perc_opts);
+				tcp_send_perc_cp(sk);
+			}
 		}
 		return -1;
 	}

@@ -3116,6 +3116,13 @@ static int do_tcp_setsockopt(struct sock *sk, int level,
 	case TCP_NODELAY:
 		__tcp_sock_set_nodelay(sk, val);
 		break;
+	
+	case TCP_PERC:
+		if(val)
+			tp->perc = 1;
+		else 
+			tp->perc = 0;
+		break;	
 
 	case TCP_THIN_LINEAR_TIMEOUTS:
 		if (val < 0 || val > 1)
@@ -3601,6 +3608,9 @@ static int do_tcp_getsockopt(struct sock *sk, int level,
 		break;
 	case TCP_NODELAY:
 		val = !!(tp->nonagle&TCP_NAGLE_OFF);
+		break;
+	case TCP_PERC:
+		val = !!(tp->perc);
 		break;
 	case TCP_CORK:
 		val = !!(tp->nonagle&TCP_NAGLE_CORK);

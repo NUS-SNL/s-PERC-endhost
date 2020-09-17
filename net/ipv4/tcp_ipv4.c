@@ -1625,7 +1625,6 @@ u16 tcp_v4_get_syncookie(struct sock *sk, struct iphdr *iph,
 int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 {
 	struct sock *rsk;
-	//printk("PERC: %x %lx %x", (tcp_sk(sk))->tcp_header_len, sizeof(struct tcphdr), TCPOLEN_PERC_ALIGNED);
 	if (sk->sk_state == TCP_ESTABLISHED) { /* Fast path */
 		struct dst_entry *dst = sk->sk_rx_dst;
 
