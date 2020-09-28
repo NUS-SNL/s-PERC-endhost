@@ -3119,9 +3119,9 @@ static int do_tcp_setsockopt(struct sock *sk, int level,
 	
 	case TCP_PERC:
 		if(val)
-			tp->perc = 1;
+			tp->perc_enabled = 1;
 		else 
-			tp->perc = 0;
+			tp->perc_enabled = 0;
 		break;	
 
 	case TCP_THIN_LINEAR_TIMEOUTS:
@@ -3610,7 +3610,7 @@ static int do_tcp_getsockopt(struct sock *sk, int level,
 		val = !!(tp->nonagle&TCP_NAGLE_OFF);
 		break;
 	case TCP_PERC:
-		val = !!(tp->perc);
+		val = !!(tp->perc_enabled);
 		break;
 	case TCP_CORK:
 		val = !!(tp->nonagle&TCP_NAGLE_CORK);

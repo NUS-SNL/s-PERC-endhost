@@ -5660,9 +5660,28 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	 *	extra cost of the net_bh soft interrupt processing...
 	 *	We do checksum and copy also but from device to kernel.
 	 */
-	if(tp->perc){
+	printk("PACE: %lu %u\n",sk->sk_pacing_rate, inet_sk(sk)->inet_sport);
+	tp->perc_enabled = 1;
+	if(tp->perc_enabled){
 		if(th->doff * 4 == sizeof(struct tcphdr) + TCPOLEN_PERC_ALIGNED){
 			if(tcp_parse_aligned_perc(tp,th)){
+				tp->num_control_packets++;
+				if(tp->rx_opt.perc_opts.ack == 1){
+					//The rate now has to be extracted from the packet and set
+					u32 min = 0; 
+					int i = 0;
+					for(i = 0; i < 4; i++){
+						u32 alloc = tp->rx_opt.perc_opts.phr[i].allocRate;
+						if(min < alloc){
+							min = alloc;
+						}
+					}
+					if(tp->num_control_packets < 1500)
+						min += 8;
+					else
+						min += 16;
+					tp->perc_rate = (min << 17);
+				}
 				tcp_send_perc_cp(sk);
 				__kfree_skb(skb);
 				return;
@@ -5671,6 +5690,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	}
 
 	tp->rx_opt.saw_tstamp = 0;
+
 
 	/*	pred_flags is 0xS?10 << 16 + snd_wnd
 	 *	if header_prediction is to be made
@@ -6129,7 +6149,9 @@ discard:
 			return 0;
 		} else {
 			tcp_send_ack(sk);
-			if(tp->perc){										//Send the first control packet IF perc is enabled
+			tp->perc_rate = 1048576 * 4;
+			tp->perc_enabled = 1;
+			if(tp->perc_enabled){										//Send the first control packet IF perc is enabled
 				initialise_perc_options(&tp->rx_opt.perc_opts);
 				tcp_send_perc_cp(sk);
 			}
@@ -6261,7 +6283,6 @@ static void tcp_rcv_synrecv_state_fastopen(struct sock *sk)
 
 int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 {
-	//printk("JEDI:Kernel Change\n");
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	const struct tcphdr *th = tcp_hdr(skb);
