@@ -364,7 +364,6 @@ struct tcp_sock {
 	int			linger2;
 	unsigned long perc_rate;
 	u8 perc_enabled : 1;
-	u32 num_control_packets;
 
 
 /* Sock_ops bpf program related variables */
