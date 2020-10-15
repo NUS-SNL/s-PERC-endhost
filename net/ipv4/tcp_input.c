@@ -5660,7 +5660,6 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	 *	extra cost of the net_bh soft interrupt processing...
 	 *	We do checksum and copy also but from device to kernel.
 	 */
-	printk("PACE: %lu %u\n",sk->sk_pacing_rate, inet_sk(sk)->inet_sport);
 	if(tp->perc_enabled){
 		if(th->doff * 4 == sizeof(struct tcphdr) + TCPOLEN_PERC_ALIGNED){
 			if(tcp_parse_aligned_perc(tp,th)){
@@ -5674,7 +5673,6 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 							min = alloc;
 						}
 					}
-					min += 8;
 					tp->perc_rate = (min << 17);
 				}
 				tcp_send_perc_cp(sk);
